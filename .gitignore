@@ -1,0 +1,13 @@
+.venv*/
+build/
+dist/
+__pycache__/
+models/
+config.json
+calibration.json
+log.txt
+crash.txt
+models_bundled/
+THIRD_PARTY_NOTICES/BUILD.md
+THIRD_PARTY_NOTICES/_build/
+_csharp_check/

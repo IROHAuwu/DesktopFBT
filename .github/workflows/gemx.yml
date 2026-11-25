@@ -1,0 +1,124 @@
+name: Export GEM-X
+
+# GEM-X（NVIDIA）三個網路轉成 ONNX，並用真的權重和官方 PyTorch 實作比對。
+# 比對全部通過才把模型放到 Release「gemx-models」（單檔上限 2GB；Actions Artifacts 的額度放不下）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['tools/export_gemx.py', '.github/workflows/gemx.yml']      # gemx.py 改了前後處理的算法時，請手動跑一次（Actions → Run workflow）
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # 權重、輸出和虛擬記憶體放空間最大的磁碟（通常是 /mnt 暫存磁碟）
+      - name: Free disk, add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/share/swift /usr/local/share/boost
+          df -h
+          BASE=/mnt
+          avail=$(df --output=avail -BG /mnt 2>/dev/null | tail -1 | tr -dc 0-9)
+          if [ "${avail:-0}" -lt 45 ]; then BASE=$HOME; fi
+          echo "work dir on $BASE"
+          sudo mkdir -p $BASE/gemx && sudo chown "$USER" $BASE/gemx
+          sudo fallocate -l 16G $BASE/gemx/swapfile && sudo chmod 600 $BASE/gemx/swapfile && sudo mkswap $BASE/gemx/swapfile && sudo swapon $BASE/gemx/swapfile
+          mkdir -p $BASE/gemx/weights $BASE/gemx/soma $BASE/gemx/out
+          ln -s $BASE/gemx/weights weights; ln -s $BASE/gemx/soma soma; ln -s $BASE/gemx/out out
+          free -g; df -h; nproc
+      - name: Dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "transformers==5.3.0" einops omegaconf scipy pillow opencv-python-headless onnx onnxruntime huggingface_hub
+          pip install "py-soma-x==0.3.3"
+          git clone https://github.com/NVlabs/GEM-X.git gemsrc
+          git -C gemsrc checkout 4aef1452e5df171deff4f293c08e643eb450981e
+          pip list 2>/dev/null | grep -i -E "^(torch|transformers|onnx|onnxruntime|py-soma-x|warp-lang|numpy|opencv)"
+      # 授權、是否需要登入、檔案大小：公開發佈前要知道的事（只顯示）
+      - name: Model repositories
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from huggingface_hub import HfApi
+          api = HfApi()
+          for repo, rev in (('nvidia/GEM-X', None), ('nvidia/SOMA-X', 'v0.3.3')):
+              try:
+                  info = api.model_info(repo, revision=rev, files_metadata=True)
+              except Exception as e:
+                  print(repo, 'ERROR', type(e).__name__, str(e)[:300]); continue
+              card = info.card_data.to_dict() if info.card_data else {}
+              print(f'== {repo} gated={info.gated} private={info.private} sha={info.sha}')
+              print('   license:', card.get('license'), '|', card.get('license_name'), '|', card.get('license_link'))
+              for s in info.siblings:
+                  print(f'   {s.rfilename}  {round((s.size or 0) / 2**20, 1)} MB')
+          PY
+      - name: Weights
+        run: |
+          hf download nvidia/GEM-X body_s240000.ckpt vitpose.pth motion_native77_e774_s292175.ckpt motion_stats_raw.npz LICENSE --local-dir weights
+          # NVIDIA 自己也放了一份 2D 關鍵點模型的 ONNX（全精度 3.2GB）：一起比
+          free_gb=$(df --output=avail -BG weights/ | tail -1 | tr -dc 0-9)
+          if [ "$free_gb" -ge 14 ]; then
+            hf download nvidia/GEM-X onnx/vitpose.onnx onnx/vitpose.onnx.data --local-dir weights || echo "::warning::official vitpose.onnx not available"
+          else
+            echo "::warning::not enough disk ($free_gb GB) for the official vitpose.onnx; skipped"
+          fi
+          rm -rf weights/.cache
+          head -c 1500 weights/LICENSE || true
+          hf download nvidia/SOMA-X SOMA_neutral.npz SOMA_template_rig.usda SOMA_procedural_transforms.json LICENSE --revision v0.3.3 --local-dir soma || echo "::warning::SOMA assets not available"
+          curl --fail --location --silent --show-error https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_x_8xb8-300e_humanart-a39d44ed.zip --output yolox.zip \
+            && unzip -j -o -q yolox.zip '*/end2end.onnx' -d weights && mv weights/end2end.onnx weights/yolox_humanart.onnx \
+            || echo "::warning::YOLOX detector not available; the comparison uses a centre box"
+          rm -f yolox.zip
+          ls -la weights/ soma/; ls -la weights/onnx || true; df -h
+      - name: Export and compare
+        run: |
+          SOMA=none; [ -f soma/SOMA_neutral.npz ] && SOMA=soma
+          python tools/export_gemx.py gemsrc weights out "$SOMA" gemsrc/assets/body_pose_motion.mp4 2>&1 | grep --line-buffered -v -E "TracerWarning|UserWarning|DeprecationWarning|^\s+(if|is_causal|torch\.onnx\.export)"
+          exit ${PIPESTATUS[0]}
+      - name: Report
+        if: always()
+        run: |
+          ls -la out || true
+          cat out/gemx_report.json || true
+          (cd out && sha256sum gemx_* 2>/dev/null) || true
+      # 模型、骨架、授權原文、檢查碼 → Release。使用者從那裡下載後放進 models\gemx。
+      - name: Publish models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          test -f gemx_skeleton.npz
+          cp "$GITHUB_WORKSPACE/weights/LICENSE" NVIDIA_OPEN_MODEL_LICENSE.txt
+          cp "$GITHUB_WORKSPACE/gemsrc/ATTRIBUTIONS.md" GEMX_ATTRIBUTIONS.md
+          cp "$GITHUB_WORKSPACE/gemsrc/LICENSE" GEMX_CODE_LICENSE_APACHE2.txt
+          cp "$GITHUB_WORKSPACE/soma/LICENSE" SOMA_LICENSE.txt
+          cat > GEMX_NOTICE.txt <<NOTE
+          These files are derivative models of NVIDIA GEM-X (https://huggingface.co/nvidia/GEM-X, https://github.com/NVlabs/GEM-X).
+          Modifications: converted from the PyTorch checkpoints to ONNX by tools/export_gemx.py of this repository
+          (commit ${GITHUB_SHA}); the two image models are stored in half precision. No retraining.
+            gemx_body_fp16.onnx(.data)   from body_s240000.ckpt (Body Pose image features)
+            gemx_kp2d_fp16.onnx(.data)   from vitpose.pth (77-point 2D keypoints)
+            gemx_motion.onnx             from motion_native77_e774_s292175.ckpt + motion_stats_raw.npz
+            gemx_skeleton.npz            rest joint positions and hierarchy computed with SOMA-X 0.3.3 assets
+          Model weights: NVIDIA Open Model License Agreement (NVIDIA_OPEN_MODEL_LICENSE.txt).
+          GEM-X source code: Apache License 2.0 (GEMX_CODE_LICENSE_APACHE2.txt); third-party notices in GEMX_ATTRIBUTIONS.md.
+          SOMA-X body model: Apache License 2.0 (SOMA_LICENSE.txt).
+          Comparison against the official PyTorch implementation: gemx_report.json.
+          NOTE
+          sha256sum gemx_body_fp16.onnx gemx_body_fp16.onnx.data gemx_kp2d_fp16.onnx gemx_kp2d_fp16.onnx.data gemx_motion.onnx gemx_skeleton.npz > SHA256SUMS
+          cat SHA256SUMS
+          gh release view gemx-models -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create gemx-models -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+            --title "GEM-X models (ONNX)" --notes "デスクトップFBT の高精度書き出し（GEM-X）用モデル。全部ダウンロードして、アプリのフォルダの models\\gemx に置いてください。 / Models for the high-accuracy export (GEM-X). Download every file into models\\gemx inside the app folder. Licenses: see GEMX_NOTICE.txt."
+          for f in gemx_body_fp16.onnx gemx_body_fp16.onnx.data gemx_kp2d_fp16.onnx gemx_kp2d_fp16.onnx.data gemx_motion.onnx gemx_skeleton.npz \
+                   gemx_report.json SHA256SUMS GEMX_NOTICE.txt NVIDIA_OPEN_MODEL_LICENSE.txt GEMX_ATTRIBUTIONS.md GEMX_CODE_LICENSE_APACHE2.txt SOMA_LICENSE.txt; do
+            gh release upload gemx-models "$f" -R "$GITHUB_REPOSITORY" --clobber
+          done

@@ -1,0 +1,18 @@
+# Windows 用。rtmlib、onnxconverter-common 要另外用 --no-deps 安裝（見 build.bat），
+# 避免把 onnxruntime（CPU 版）一起裝進來，和 Windows ML 版（內含 DirectML）衝突。
+numpy>=1.24
+tqdm
+opencv-python>=4.8
+wasdk-Microsoft.Windows.AI.MachineLearning[all]==2.3.0
+wasdk-Microsoft.Windows.ApplicationModel.DynamicDependency.Bootstrap==2.3.0
+onnxruntime-windowsml
+onnx>=1.15
+protobuf>=3.20
+packaging
+python-osc>=1.8
+pywebview>=5.0
+dxcam>=0.0.5
+aiohttp>=3.9
+cryptography>=42
+segno>=1.6
+pygrabber>=0.2; sys_platform == "win32"

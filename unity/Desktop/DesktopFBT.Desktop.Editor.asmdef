@@ -1,0 +1,24 @@
+{
+    "name": "DesktopFBT.Desktop.Editor",
+    "rootNamespace": "",
+    "references": [],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "YFBT_VRC_AVATARS"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.avatars",
+            "expression": "3.0.0",
+            "define": "YFBT_VRC_AVATARS"
+        }
+    ],
+    "noEngineReferences": false
+}

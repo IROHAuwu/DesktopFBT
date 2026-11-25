@@ -1,0 +1,2 @@
+Text of the license page for NuGet package Microsoft.AI.DirectML 1.15.4, retrieved 2026-11-17 from https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License (HTML <pre> content, entities unescaped, otherwise verbatim).
+The packaged onnxruntime/capi/DirectML.dll reports ProductName "DirectML Redistributable Library", FileVersion 1.15.4+241025-1615.1.dml-1.15.fac7597.

@@ -1,0 +1,173 @@
+name: Build Windows EXE
+
+# 發佈新版：改 RELEASE 檔（內容是標籤，例如 v1.9.5）推到 main，就會建置並發佈；也可以手動執行。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['RELEASE']
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install --no-deps rtmlib onnxconverter-common
+          pip install "pyinstaller>=6.3"
+
+      - name: Bundled MotionBERT model (from the models branch)
+        shell: bash
+        run: |
+          git fetch -q --depth 1 origin models
+          mkdir -p models_bundled
+          for f in motionbert_lite.onnx agformer_base.onnx agformer_small.onnx; do git show FETCH_HEAD:$f > models_bundled/$f; done
+          cd models_bundled && git show FETCH_HEAD:SHA256SUMS | grep onnx | sha256sum -c -
+
+      - name: Check imports
+        run: python -c "import rtmlib, onnxruntime, webview, cv2, onnx, dxcam; from onnxconverter_common import float16; import winui3.microsoft.windows.ai.machinelearning, winui3.microsoft.windows.applicationmodel.dynamicdependency.bootstrap; p = onnxruntime.get_available_providers(); print(onnxruntime.__version__, p); assert 'DmlExecutionProvider' in p; assert hasattr(onnxruntime, 'register_execution_provider_library')"
+
+      # 一個測試失敗就停：PowerShell 預設只看最後一個指令的結束碼，中間失敗的會被當成通過（所以每個都檢查）。
+      # 不用 bash：Git Bash 會替系統管理員開啟備份／還原權限，test_writable_startup 的「刪不掉」權限測試會失效。
+      - name: Tests (no hardware)
+        shell: pwsh
+        run: |
+          $tests = 'test_engine', 'test_video', 'test_precise', 'test_lift_up', 'test_phone', 'test_anim', 'test_limbs', 'test_steady', 'test_clips', 'test_sync',
+                   'test_accuracy', 'test_temporal', 'test_gemx', 'test_desktop', 'test_model_download',
+                   'test_writable_startup', 'test_unblock', 'test_atomic_save', 'test_video_tempcopy', 'test_selftest'
+          foreach ($t in $tests) {
+            Write-Host "::group::$t"
+            python "tests/$t.py"
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            if ($code -ne 0) { Write-Host "::error::tests/$t.py failed (exit $code)"; exit 1 }
+          }
+          node tests/test_ui.js
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::tests/test_ui.js failed"; exit 1 }
+
+      # Unity 工具的 C# 沒辦法在這裡編譯，至少用 C# 的文法分析器檢查語法和變數宣告。
+      # 分析器裝在另一個資料夾，不混進要打包的環境（第三方授權清單是照安裝的套件產生的）。
+      - name: C# static check (Unity tool)
+        shell: pwsh
+        run: |
+          pip install --target _csharp_check tree-sitter tree-sitter-c-sharp
+          $env:PYTHONPATH = "_csharp_check"
+          python tests/test_csharp.py
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::tests/test_csharp.py failed"; exit 1 }
+
+      # 第一次使用時要從這些網址下載姿勢模型：每次建置都確認它們還活著（只顯示，不擋建置）
+      - name: Model download hosts
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $urls = python -c "import models as m, os; print(m.DET_URL); print(m.MIRROR + os.path.basename(m.DET_URL)); print(m.POSE3D_URL)"
+          foreach ($u in $urls) {
+            try { $r = Invoke-WebRequest -Uri $u -Method Head -TimeoutSec 30 -MaximumRedirection 5; Write-Host "$($r.StatusCode) $($r.Headers['Content-Length']) $u" }
+            catch { Write-Host "::warning::model host not reachable: $u ($($_.Exception.Message))" }
+          }
+
+      # 把這次實際安裝的套件的授權檔一起包進 EXE（THIRD_PARTY_NOTICES/BUILD.md、_build）
+      - name: Third-party notices for this build
+        run: python tools/notices.py THIRD_PARTY_NOTICES
+
+      - name: Build
+        run: pyinstaller --noconfirm DesktopFBT.spec
+
+      - name: Check the EXE folder
+        shell: pwsh
+        run: |
+          if (!(Test-Path dist/DesktopFBT/DesktopFBT.exe)) { exit 1 }
+          if (!(Test-Path dist/DesktopFBT/_internal/web/index.html)) { exit 1 }
+          if (!(Test-Path dist/DesktopFBT/_internal/models_bundled/agformer_base.onnx)) { exit 1 }
+          if (!(Test-Path dist/DesktopFBT/_internal/THIRD_PARTY_NOTICES/BUILD.md)) { exit 1 }
+          Get-ChildItem -Recurse dist/DesktopFBT/_internal -Filter *.dll | Where-Object { $_.Name -match 'DirectML|onnxruntime' } | Select-Object Name
+
+      - name: Self-test the EXE
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/DesktopFBT/DesktopFBT.exe -ArgumentList '--selftest' -Wait -PassThru
+          if (Test-Path dist/DesktopFBT/crash.txt) { Get-Content dist/DesktopFBT/crash.txt; exit 1 }
+          if (!(Test-Path dist/DesktopFBT/selftest.txt)) { Write-Host "no selftest.txt (exit $($p.ExitCode))"; exit 1 }
+          Get-Content dist/DesktopFBT/selftest.txt
+          $j = Get-Content dist/DesktopFBT/selftest.txt -Raw | ConvertFrom-Json
+          if (-not $j.ok) { Write-Host "self-test reported a problem"; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Host "self-test exit code $($p.ExitCode)"; exit 1 }
+          Remove-Item dist/DesktopFBT/selftest.txt, dist/DesktopFBT/config.json -ErrorAction SilentlyContinue
+
+      # 使用者回報：用 Windows 解壓縮下載來的 zip 後打不開（Failed to resolve Python.Runtime.Loader.Initialize）。
+      # 模擬那個狀態（DLL 帶著「來自網路」的標記）：先看不處理時會不會壞（只顯示），再確認正常啟動會自己解除。
+      - name: Downloaded-zip check (DLLs marked as coming from the internet)
+        shell: pwsh
+        run: |
+          function Mark { Get-ChildItem dist/DesktopFBT/_internal -Recurse -File -Filter *.dll | ForEach-Object { Set-Content -LiteralPath $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3" } }
+          function Run {
+            Remove-Item dist/DesktopFBT/selftest.txt -ErrorAction SilentlyContinue
+            $p = Start-Process dist/DesktopFBT/DesktopFBT.exe -ArgumentList '--selftest' -PassThru
+            if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Host "timed out"; return $null }
+            if (!(Test-Path dist/DesktopFBT/selftest.txt)) { Write-Host "no selftest.txt (exit $($p.ExitCode))"; return $null }
+            return (Get-Content dist/DesktopFBT/selftest.txt -Raw | ConvertFrom-Json)
+          }
+          Mark
+          $env:DESKTOPFBT_KEEP_BLOCKED = '1'
+          $j = Run
+          Write-Host "::notice::marked DLLs left as they are: dotnet = $($j.dotnet)"
+          Remove-Item Env:DESKTOPFBT_KEEP_BLOCKED
+          Mark
+          $j = Run
+          Write-Host "::notice::marked DLLs, normal start: unblocked = $($j.unblocked), dotnet = $($j.dotnet)"
+          if ($null -eq $j -or $j.dotnet -ne $true -or $j.unblocked -lt 1) { Write-Host "::error::the app does not start from a downloaded zip"; exit 1 }
+          $left = @(Get-ChildItem dist/DesktopFBT -Recurse -File | Where-Object { Get-Item -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue })
+          if ($left.Count -gt 0) { Write-Host "::error::$($left.Count) files still marked"; exit 1 }
+          Remove-Item dist/DesktopFBT/selftest.txt, dist/DesktopFBT/config.json, dist/DesktopFBT/crash.txt, dist/DesktopFBT/log.txt -ErrorAction SilentlyContinue
+
+      - name: Release tag
+        id: rel
+        shell: pwsh
+        run: |
+          $tag = ''
+          if ('${{ github.ref_type }}' -eq 'tag') { $tag = '${{ github.ref_name }}' }
+          elseif (Test-Path RELEASE) { $tag = (Get-Content RELEASE -Raw).Trim() }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          $name = if ($tag) { $tag } else { 'dev' }
+          "zip=DesktopFBT_$name.zip" >> $env:GITHUB_OUTPUT
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/DesktopFBT -DestinationPath dist/${{ steps.rel.outputs.zip }} -Force
+
+      # 帳號的 Actions 儲存空間滿了的時候這一步會失敗：不要擋住後面的 Release
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: DesktopFBT
+          path: dist/DesktopFBT_*.zip
+          retention-days: 3          # 正式的檔案在 Release；這份只是備用，留太久會把儲存額度塞滿
+
+      # 發布：推送 v* 標籤，或修改 RELEASE 檔案（內容是標籤，例如 v0.3.0）
+      - name: Release
+        if: steps.rel.outputs.tag != ''
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: デスクトップFBT ${{ steps.rel.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: dist/${{ steps.rel.outputs.zip }}
+          body: |
+            免安裝版：解壓縮後執行 DesktopFBT.exe。第一次使用會自動下載姿勢模型（約 470MB）。
+            使用說明請看 README。

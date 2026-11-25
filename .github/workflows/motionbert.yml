@@ -1,0 +1,46 @@
+name: Export models
+
+# 內附的時間序列模型很少更新：只手動執行（Actions → Run workflow）。結果會強制推到 models 分支。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Export
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install onnx onnxruntime numpy
+          git clone --depth 1 https://github.com/Walter0807/MotionBERT.git mbsrc
+          curl -fL -o mb.bin https://huggingface.co/walterzhu/MotionBERT/resolve/main/checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin
+          mkdir -p out
+          python tools/export_motionbert.py mbsrc mb.bin out/motionbert_lite.onnx
+          cp mbsrc/LICENSE out/MotionBERT_LICENSE
+      - name: MotionAGFormer
+        run: |
+          pip install gdown timm
+          git clone --depth 1 https://github.com/TaatiTeam/MotionAGFormer.git agfsrc
+          gdown -q 1Iii5EwsFFm9_9lKBUPfN8bV5LmfkNUMP -O agf_base.pth.tr
+          gdown -q 1DrF7WZdDvRPsH12gQm5DPXbviZ4waYFf -O agf_small.pth.tr
+          python tools/export_agformer.py agfsrc agf_base.pth.tr base out/agformer_base.onnx
+          python tools/export_agformer.py agfsrc agf_small.pth.tr small out/agformer_small.onnx
+          cp agfsrc/LICENSE out/MotionAGFormer_LICENSE
+      # 轉好的模型放在獨立的 models 分支（不進主要歷史）；打包時從這裡拿
+      - name: Publish to the models branch
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS
+          git init -q -b models
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add -A
+          git commit -qm "MotionBERT-Lite ONNX (FT_MB_lite_MB_ft_h36m_global_lite)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" models

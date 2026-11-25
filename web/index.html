@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>デスクトップFBT</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="6" r="3.2"/><circle cx="9" cy="15" r="2.4"/><circle cx="23" cy="15" r="2.4"/><circle cx="16" cy="17" r="2.4"/><circle cx="11" cy="28" r="2.4"/><circle cx="21" cy="28" r="2.4"/></svg>
+      <div><b>デスクトップ<wbr>FBT</b><span id="version"></span></div>
+    </div>
+    <button class="nav" data-view="live"><b data-i18n="nav_live"></b><span data-i18n="nav_live_sub"></span></button>
+    <button class="nav" data-view="video"><b data-i18n="nav_video"></b><span data-i18n="nav_video_sub"></span></button>
+    <button class="nav" data-view="images"><b data-i18n="nav_images"></b><span data-i18n="nav_images_sub"></span></button>
+    <button class="nav" data-view="motion"><b data-i18n="nav_motion"></b><span data-i18n="nav_motion_sub"></span></button>
+    <div class="rail-gap"></div>
+    <button class="nav small" data-view="unity"><b data-i18n="nav_unity"></b></button>
+    <button class="nav small" data-view="settings"><b data-i18n="nav_settings"></b></button>
+  </nav>
+
+  <main class="stage">
+    <div class="tally" id="tally"><i></i><span id="tally-text"></span></div>
+    <div class="screen" id="screen">
+      <div class="floor" aria-hidden="true"></div>
+      <img id="preview" alt="">
+      <p class="empty" id="empty" data-i18n="stage_empty"></p>
+      <div class="countdown" id="countdown" hidden></div>
+      <div class="phase" id="phase" hidden><div class="bar"><i id="phase-bar"></i></div><span id="phase-text"></span></div>
+    </div>
+    <div class="hint" id="hint" hidden></div>
+    <div class="error" id="error" hidden><span id="error-text"></span><button id="error-close" aria-label="close">×</button></div>
+    <dl class="meters">
+      <div class="big"><dt data-i18n="m_fps"></dt><dd><span id="m-fps">–</span><small>FPS</small></dd></div>
+      <div class="using"><dt data-i18n="m_using"></dt><dd id="m-using">–</dd></div>
+      <div><dt data-i18n="m_src"></dt><dd><span id="m-src">–</span><small>FPS</small></dd></div>
+      <div><dt data-i18n="m_model"></dt><dd><span id="m-model">–</span><small id="m-prec">ms</small></dd></div>
+      <div><dt data-i18n="m_delay"></dt><dd><span id="m-delay">–</span><small>s</small></dd></div>
+    </dl>
+  </main>
+
+  <aside class="panel">
+    <!-- 即時 -->
+    <section class="view" data-view="live">
+      <h1 data-i18n="live_title"></h1>
+      <p class="note" data-i18n="live_note"></p>
+      <div class="seg" id="src-kind">
+        <button data-kind="window" data-i18n="src_window"></button>
+        <button data-kind="file" data-i18n="src_file"></button>
+        <button data-kind="camera" data-i18n="src_camera"></button>
+        <button data-kind="phone" data-i18n="src_phone"></button>
+      </div>
+      <div class="field" data-for="window">
+        <div class="row"><select id="win-list"></select><button class="ghost" id="win-refresh" data-i18n="src_refresh"></button></div>
+        <p class="note" data-i18n="src_window_hint"></p>
+      </div>
+      <div class="field" data-for="camera">
+        <div class="row"><select id="cam-list"></select><button class="ghost" id="cam-refresh" data-i18n="src_refresh"></button></div>
+        <p class="note" data-i18n="src_camera_hint"></p>
+        <input type="text" id="cam-url" spellcheck="false" autocomplete="off" data-i18n-ph="src_url_ph">
+        <p class="note" data-i18n="src_url_hint"></p>
+      </div>
+      <div class="field" data-for="phone">
+        <div class="qr"><img id="phone-qr" alt=""><div><p class="note" data-i18n="src_phone_hint"></p><code id="phone-url"></code></div></div>
+        <p class="phone-st" id="phone-st"></p>
+      </div>
+      <div class="field" data-for="file">
+        <button class="file" id="live-pick"><span id="live-file" data-i18n="src_none"></span></button>
+        <label class="check"><input type="checkbox" data-cfg="video.loop"><span data-i18n="loop"></span></label>
+      </div>
+      <div class="group">
+        <div class="field" id="smooth-field">
+          <label><span data-i18n="smooth"></span></label>
+          <input type="range" min="0" max="1" step="0.05" data-cfg="live.smoothness" data-num>
+          <div class="ends"><span data-i18n="smooth_lo"></span><span data-i18n="smooth_hi"></span></div>
+        </div>
+        <label class="switch" id="temporal-sw"><input type="checkbox" data-cfg="live.temporal"><span><b data-i18n="temporal"></b><small data-i18n="temporal_note"></small></span></label>
+        <div class="field" id="tmodel-field"><label data-i18n="tmodel"></label>
+          <select data-cfg="live.temporal_model"><option value="agformer_b" data-i18n="tm_agf_b"></option><option value="agformer_s" data-i18n="tm_agf_s"></option><option value="motionbert" data-i18n="tm_mb"></option></select></div>
+        <label class="switch"><input type="checkbox" data-cfg="live.grounded"><span><b data-i18n="grounded"></b><small data-i18n="grounded_note"></small></span></label>
+        <label class="switch" id="precise-sw"><input type="checkbox" data-cfg="live.precise"><span><b data-i18n="precise"></b><small data-i18n="precise_note"></small></span></label>
+        <div class="field" id="delay-field">
+          <label><span data-i18n="delay"></span><output id="delay-out"></output></label>
+          <input type="range" min="0.4" max="1.6" step="0.1" data-cfg="live.delay" data-num>
+        </div>
+      </div>
+      <p class="osc"><span data-i18n="osc_addr"></span> <code id="osc-addr"></code> · <span data-i18n="m_sent"></span> <code id="osc-sent">0</code></p>
+      <p class="osc" id="tm-line" hidden></p>
+      <button class="go" id="live-go" data-i18n="start"></button>
+    </section>
+
+    <!-- 影片 → 動作 -->
+    <section class="view" data-view="video">
+      <h1 data-i18n="video_title"></h1>
+      <p class="note" data-i18n="video_note"></p>
+      <button class="file" id="video-pick"><span id="video-file" data-i18n="src_none"></span></button>
+      <div class="field"><label data-i18n="method"></label>
+        <select data-cfg="video.method"><option value="standard" data-i18n="method_std"></option><option value="gemx" data-i18n="method_gemx"></option></select>
+        <p class="note" data-i18n="method_note"></p></div>
+      <div class="result" id="video-result" hidden></div>
+      <button class="go" id="video-go" data-i18n="export_video"></button>
+    </section>
+
+    <!-- 圖片 → 姿勢 -->
+    <section class="view" data-view="images">
+      <h1 data-i18n="images_title"></h1>
+      <p class="note" data-i18n="images_note"></p>
+      <button class="file" id="images-pick"><span id="images-file" data-i18n="src_none"></span></button>
+      <div class="field"><label data-i18n="method"></label>
+        <select data-cfg="video.method"><option value="standard" data-i18n="method_std_img"></option><option value="gemx" data-i18n="method_gemx"></option></select>
+        <p class="note" data-i18n="method_note_img"></p></div>
+      <div class="result" id="images-result" hidden></div>
+      <button class="go" id="images-go" data-i18n="export_images"></button>
+    </section>
+
+    <!-- 動作庫 -->
+    <section class="view" data-view="motion">
+      <h1 data-i18n="motion_title"></h1>
+      <p class="note" data-i18n="motion_note"></p>
+      <div class="motions" id="motion-list"></div>
+      <p class="note" id="motion-empty" data-i18n="motion_empty" hidden></p>
+      <button class="link" id="motion-restore" hidden></button>
+      <div class="row"><button class="ghost" id="motion-add" data-i18n="motion_add"></button><button class="ghost" id="motion-refresh" data-i18n="src_refresh"></button></div>
+      <p class="note" data-i18n="motion_add_note"></p>
+      <div class="result warn" id="motion-result" hidden></div>
+      <div class="group">
+        <label class="check"><input type="checkbox" data-cfg="motion.loop"><span data-i18n="motion_loop"></span></label>
+        <div class="field">
+          <label><span data-i18n="motion_speed"></span><output id="speed-out"></output></label>
+          <input type="range" min="0.25" max="2" step="0.05" data-cfg="motion.speed" data-num>
+        </div>
+      </div>
+      <p class="osc"><span data-i18n="osc_addr"></span> <code id="osc-addr2"></code> · <span data-i18n="m_sent"></span> <code id="osc-sent2">0</code></p>
+      <button class="go stop" id="motion-stop" data-i18n="motion_stop"></button>
+    </section>
+
+    <!-- Unity -->
+    <section class="view" data-view="unity">
+      <h1 data-i18n="unity_title"></h1>
+      <p class="note" data-i18n="unity_note"></p>
+      <p class="note" data-i18n="unity_open_hint"></p>
+      <div class="result" id="unity-result" hidden></div>
+      <button class="go" id="unity-install" data-i18n="unity_install"></button>
+    </section>
+
+    <!-- 設定 -->
+    <section class="view" data-view="settings">
+      <h1 data-i18n="set_title"></h1>
+      <button class="ghost" id="ob-open" data-i18n="ob_open"></button>
+      <div class="field"><label data-i18n="set_lang"></label>
+        <select data-cfg="language"><option value="auto" data-i18n="lang_auto"></option><option value="zh">繁體中文</option><option value="ja">日本語</option><option value="en">English</option></select></div>
+      <div class="field"><label data-i18n="set_height"></label><input type="number" min="1.0" max="2.3" step="0.01" data-cfg="user_height_m" data-num><p class="note" data-i18n="set_height_note"></p></div>
+      <div class="field"><label data-i18n="set_hfov"></label><input type="number" min="30" max="130" step="1" data-cfg="video.hfov_deg" data-num><p class="note" data-i18n="set_hfov_note"></p></div>
+      <div class="field"><label data-i18n="set_head"></label><input type="number" min="8" max="16" step="0.5" data-cfg="pose.head_cm" data-num><p class="note" data-i18n="set_head_note"></p></div>
+      <label class="switch"><input type="checkbox" data-cfg="video.mirror"><span><b data-i18n="set_mirror"></b><small data-i18n="set_mirror_note"></small></span></label>
+      <div class="field"><label data-i18n="set_device"></label>
+        <select data-cfg="pose.device" id="dev-select"><option value="auto" data-i18n="dev_auto"></option><option value="migraphx" data-i18n="dev_migraphx"></option><option value="dml" data-i18n="dev_dml"></option><option value="cuda" data-i18n="dev_cuda"></option><option value="cpu" data-i18n="dev_cpu"></option></select></div>
+      <div class="field"><label data-i18n="set_precision"></label>
+        <select data-cfg="pose.precision"><option value="auto" data-i18n="prec_auto"></option><option value="fp16" data-i18n="prec_fp16"></option><option value="fp32" data-i18n="prec_fp32"></option></select></div>
+      <div class="field"><label><span data-i18n="set_batch"></span><output id="batch-out"></output></label><input type="range" min="1" max="8" step="1" data-cfg="pose.batch" data-num><p class="note" data-i18n="set_batch_note"></p></div>
+      <label class="switch"><input type="checkbox" data-cfg="pose.tta"><span><b data-i18n="set_tta"></b><small data-i18n="set_tta_note"></small></span></label>
+      <div class="field"><label data-i18n="set_live_fps"></label>
+        <select data-cfg="live.fps" data-num><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option></select></div>
+      <div class="row2">
+        <div class="field"><label data-i18n="set_osc_host"></label><input type="text" data-cfg="vrchat.host"></div>
+        <div class="field"><label data-i18n="set_osc_port"></label><input type="number" min="1" max="65535" data-cfg="vrchat.port" data-num></div>
+      </div>
+      <button class="ghost" id="open-folder" data-i18n="set_folder"></button>
+    </section>
+  </aside>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+<div class="onboard" id="onboard" hidden>
+  <div class="ob-card">
+    <section class="ob-step" data-step="unity">
+      <h2 data-i18n="ob_unity_t"></h2>
+      <ol class="ob-list"><li data-i18n="ob_unity_1"></li><li data-i18n="ob_unity_2"></li><li data-i18n="ob_unity_3"></li><li data-i18n="ob_unity_4"></li></ol>
+      <div class="row"><button class="ghost" id="ob-import" data-i18n="unity_install"></button><span class="ob-done" id="ob-import-done"></span></div>
+      <button class="go" data-next="source" data-i18n="ob_next"></button>
+    </section>
+    <section class="ob-step" data-step="source">
+      <h2 data-i18n="ob_source_t"></h2>
+      <button class="choice" data-pick="window"><b data-i18n="ob_src_window"></b><span data-i18n="ob_src_window_d"></span></button>
+      <button class="choice" data-pick="camera"><b data-i18n="ob_src_camera"></b><span data-i18n="ob_src_camera_d"></span></button>
+      <button class="choice" data-pick="phone"><b data-i18n="ob_src_phone"></b><span data-i18n="ob_src_phone_d"></span></button>
+    </section>
+    <div class="ob-foot"><button class="link" id="ob-back" data-i18n="ob_back"></button><button class="link" id="ob-skip" data-i18n="ob_skip"></button></div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#15161f">
+<title>デスクトップFBT</title>
+<style>
+  :root { --bg:#15161f; --text:#ECEEF8; --muted:#9AA0BF; --faint:#6A7092; --a:#8b7cff; --b:#ff5468;
+          --ok:#6BE6A8; --warn:#FFC861; --bad:#FF7A59; --line:rgba(255,255,255,.1); --glass:rgba(255,255,255,.06); }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; background:var(--bg); color:var(--text); height:100%; }
+  body { font:16px/1.45 -apple-system, "SF Pro Text", "Hiragino Sans", "PingFang TC", system-ui, sans-serif;
+         padding:calc(14px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+         display:flex; flex-direction:column; gap:14px; }
+  header { display:flex; align-items:center; justify-content:space-between; }
+  .brand { font-weight:600; font-size:17px; display:flex; align-items:center; gap:8px; }
+  .brand svg { width:26px; height:26px; }
+  .brand circle { fill:none; stroke-width:3.2; }
+  .layout { display:flex; flex-direction:column; gap:14px; min-height:0; }
+  .panel { display:flex; flex-direction:column; gap:12px; }
+  /* 畫面的比例跟著影像（直放 9:16、橫放 16:9），不會被裁掉或縮得很小 */
+  .stage { position:relative; border-radius:16px; overflow:hidden; background:#0A0B16; aspect-ratio:16/9;
+           max-height:58vh; align-self:center; width:100%; }
+  .stage.tall { width:auto; height:58vh; }
+  /* 橫拿：左邊畫面、右邊按鈕，不用捲動 */
+  @media (orientation: landscape) {
+    body { padding:calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+           calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); gap:8px; }
+    .layout { flex-direction:row; flex:1; align-items:stretch; }
+    .stage { flex:1.5; width:auto; max-height:none; height:auto; align-self:center; max-width:62vw; }
+    .stage.tall { flex:none; height:calc(100vh - 70px); }
+    .panel { flex:1; min-width:220px; overflow-y:auto; gap:8px; }
+    .btn { padding:10px; } .btn.primary { padding:12px; }
+    .hint { font-size:13px; }
+  }
+  .stage canvas { width:100%; height:100%; object-fit:contain; display:block; }
+  .stage .idle { position:absolute; inset:0; display:grid; place-items:center; color:var(--faint); text-align:center; padding:20px; }
+  .stage { box-shadow:inset 0 0 0 2px rgba(139,124,255,.5); }
+  /* 不能 display:none：iPhone Safari 對看不到的 video 幾乎不更新影格（只剩約 1 FPS） */
+  .feed { position:fixed; left:0; top:0; width:4px; height:4px; opacity:0.01; pointer-events:none; z-index:-1; }
+  .status { display:flex; align-items:center; gap:10px; color:var(--muted); min-height:24px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--faint); flex:none; }
+  .status.live .dot { background:var(--ok); }
+  .status.warn .dot { background:var(--warn); }
+  .status.err .dot { background:var(--bad); }
+  .status.live, .status.err { color:var(--text); }
+  .row { display:flex; gap:10px; }
+  .row .btn { flex:1; }
+  .btn { border:1px solid var(--line); background:var(--glass); color:var(--text); font:inherit; font-weight:600;
+         padding:14px; border-radius:14px; }
+  .btn.primary { background:var(--text); color:#12142A; border-color:transparent; font-size:17px; padding:16px; }
+  .btn.primary.stop { background:transparent; color:var(--b); border-color:var(--b); }
+  .btn:disabled { opacity:.4; }
+  .hint { color:var(--faint); font-size:14px; margin:0; }
+  .warn-box { border:1px solid rgba(255,200,97,.4); background:rgba(255,200,97,.08); color:var(--warn);
+              border-radius:12px; padding:10px 12px; font-size:14px; }
+  .hidden { display:none !important; }
+  /* 黑畫面：相機照常傳送，螢幕全黑、擋住所有觸控（OLED 黑色幾乎不耗電） */
+  #blackout { position:fixed; inset:0; z-index:99; background:#000; touch-action:none;
+              display:grid; place-items:center; user-select:none; -webkit-user-select:none; }
+  #blackout .msg { color:#5a5e74; font-size:15px; text-align:center; line-height:1.7; transition:opacity .6s; }
+  #blackout .msg.fade { opacity:0; }
+  #blackout .bar { width:140px; height:3px; margin:10px auto 0; background:#1b1d2a; border-radius:2px; overflow:hidden; }
+  #blackout .bar i { display:block; height:100%; width:0; background:#5a5e74; }
+  #blackout.err .msg { color:#a8553f; opacity:1; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="11" stroke="#8b7cff"/></svg>
+      デスクトップFBT
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="stage" id="stage">
+      <canvas id="cv"></canvas>
+      <div class="idle" id="idle"></div>
+    </div>
+    <div class="panel">
+      <div class="status" id="status"><span class="dot"></span><span id="status-text"></span></div>
+      <div class="warn-box hidden" id="portrait"></div>
+      <button class="btn primary" id="go"></button>
+      <button class="btn" id="lens"></button>
+      <div class="row">
+        <button class="btn" id="flip"></button>
+        <button class="btn" id="rotate"></button>
+      </div>
+      <button class="btn" id="res"></button>
+      <button class="btn" id="dark" disabled></button>
+      <p class="hint" id="hint"></p>
+    </div>
+  </main>
+  <div id="blackout" class="hidden"><div class="msg" id="bo-msg"><span id="bo-text"></span><div class="bar"><i id="bo-bar"></i></div></div></div>
+
+  <video id="v" playsinline muted autoplay class="feed"></video>
+
+<script>
+(() => {
+  const T = {
+    zh: { start: '開始傳送', stop: '停止', back: '後鏡頭', front: '前鏡頭', rotate: '旋轉畫面', res: '解析度', auto: '自動', ultra: '鏡頭：超廣角', wide: '鏡頭：廣角', noultra: '這支手機沒有超廣角',
+          idle: '按「開始傳送」，允許使用相機', live: '傳送中', fps: 'fps', connecting: '連線中…',
+          busy: '另一支手機正在傳送，請先在那支手機按停止', lost: '連不到電腦，請確認在同一個 Wi‑Fi',
+          denied: '沒有相機權限。請在瀏覽器的網站設定允許相機（iPhone：設定 → Safari → 相機），然後重新整理',
+          insecure: '這個網頁需要用 https 開啟，請重新掃描電腦上的 QR code',
+          portrait: '直放、橫放都可以，畫面會自動轉正。如果還是歪的，按「旋轉畫面」手動調整',
+          hint: '請固定手機並接上充電器，傳送中螢幕會保持亮著。電腦上看到畫面就完成了。',
+          dark: '黑畫面（防誤觸、省電）', dark_live: '傳送中', dark_exit: '長按 2 秒回到畫面' },
+    ja: { start: '送信開始', stop: '停止', back: '背面', front: '前面', rotate: '映像を回転', res: '解像度', auto: '自動', ultra: 'レンズ：超広角', wide: 'レンズ：広角', noultra: 'このスマホには超広角がありません',
+          idle: '「送信開始」を押して、カメラの使用を許可してください', live: '送信中', fps: 'fps', connecting: '接続中…',
+          busy: '別のスマホが送信中です。そちらで停止してください', lost: 'PCに接続できません。同じWi‑Fiか確認してください',
+          denied: 'カメラの許可がありません。ブラウザのサイト設定でカメラを許可してから再読み込みしてください（iPhone：設定 → Safari → カメラ）',
+          insecure: 'このページは https で開く必要があります。PCのQRコードをもう一度読み取ってください',
+          portrait: '縦置き・横置きどちらでも、映像は自動でまっすぐになります。傾いたままなら「映像を回転」で調整してください',
+          hint: 'スマホを固定して充電器につないでください。送信中は画面が消えません。PCに映像が出れば完了です。',
+          dark: '黒画面（誤タッチ防止・省電力）', dark_live: '送信中', dark_exit: '2秒長押しで戻る' },
+    en: { start: 'Start sending', stop: 'Stop', back: 'Back camera', front: 'Front camera', rotate: 'Rotate image', res: 'Resolution', auto: 'auto', ultra: 'Lens: ultra wide', wide: 'Lens: wide', noultra: 'This phone has no ultra wide lens',
+          idle: 'Tap “Start sending” and allow camera access', live: 'Sending', fps: 'fps', connecting: 'Connecting…',
+          busy: 'Another phone is sending. Stop it there first', lost: 'Can’t reach the PC. Check you’re on the same Wi‑Fi',
+          denied: 'No camera permission. Allow the camera in the browser’s site settings (iPhone: Settings → Safari → Camera), then reload',
+          insecure: 'Open this page over https. Scan the QR code on the PC again',
+          portrait: 'Upright or sideways both work; the image straightens itself. If it’s still tilted, tap “Rotate image”',
+          hint: 'Mount the phone and plug in a charger. The screen stays on while sending. You’re done when the PC shows the image.',
+          dark: 'Black screen (no accidental taps, saves power)', dark_live: 'Sending', dark_exit: 'Press and hold 2 s to return' },
+  };
+  const nl = (navigator.language || 'en').toLowerCase();
+  const L = T[nl.startsWith('ja') ? 'ja' : nl.startsWith('zh') ? 'zh' : 'en'];
+  const $ = id => document.getElementById(id);
+  const client = Math.random().toString(36).slice(2);
+  // 旋轉：'auto' = 依手機的實際方向自動轉正（螢幕方向鎖定時也可以），或手動 0/90/180/270
+  let rotMode = localStorage.getItem('rotMode') || 'auto';
+  let rot = 0, phys = 0;
+  function onTilt(e) {
+    if (e.beta == null || e.gamma == null) return;
+    const b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+    const ux = -Math.sin(g) * Math.cos(b), uy = Math.sin(b);          // 手機座標裡的「上」（螢幕平面）
+    if (Math.hypot(ux, uy) < 0.5) return;                            // 手機平放：看不出方向，維持原本的
+    const a = Math.atan2(-ux, uy) * 180 / Math.PI;                    // 0 = 直立，90 = 頂端朝右
+    const snap = Math.round(a / 90) * 90;
+    if (Math.abs(a - snap) < 35) phys = ((snap % 360) + 360) % 360;    // 中間角度不切換（不會一直跳）
+  }
+  function autoRot() {
+    const tall = window.innerHeight > window.innerWidth;
+    const side = phys === 90 || phys === 270;
+    if (side === !tall) return 0;                                     // 螢幕有跟著轉：影像本來就是正的
+    if (side) return phys;                                            // 螢幕鎖定直向、手機橫拿
+    return 0;
+  }
+  // 解析度：以 iPhone 錄影的 16:9 規格（1280×720、960×540…）為準，數字是長邊；auto = 依 Wi‑Fi 自動降
+  const RES = ['auto', '1280', '960', '640', '480'];
+  let res = localStorage.getItem('res') || 'auto';
+  if (!RES.includes(res)) res = 'auto';
+  const resLabel = r => r === 'auto' ? L.auto : `${r}×${Math.round(+r * 9 / 16)}`;
+  function curRot() { return rotMode === 'auto' ? autoRot() : +rotMode; }
+  let facing = localStorage.getItem('facing') || 'environment';
+  let lens = localStorage.getItem('lens') || 'wide';         // 預設廣角（超廣角變形大，姿勢比較不準）
+  let ultraId = null, ultraChecked = false;
+  let fmt = { width: 1280, height: 720, fps: 30, quality: 0.75 };
+  let stream = null, running = false, inflight = 0, lastSend = 0, wakeLock = null;
+  let sent = 0, fpsT = performance.now(), fps = 0, fails = 0, capT = 0;
+  const v = $('v'), cv = $('cv'), ctx = cv.getContext('2d');
+
+  function texts() {
+    $('go').textContent = running ? L.stop : L.start;
+    $('go').classList.toggle('stop', running);
+    $('flip').textContent = facing === 'environment' ? L.front : L.back;
+    $('lens').textContent = lens === 'ultra' ? L.ultra : L.wide;
+    $('lens').disabled = facing !== 'environment' || (ultraChecked && !ultraId);
+    if (ultraChecked && !ultraId) $('lens').textContent = L.noultra;
+    $('rotate').textContent = L.rotate + (rotMode === 'auto' ? ` (${L.auto})` : ` (${rotMode}°)`);
+    $('res').textContent = `${L.res}：${resLabel(res)}`;
+    $('dark').textContent = L.dark;
+    $('dark').disabled = !running;
+    $('idle').textContent = L.idle;
+    $('hint').textContent = L.hint;
+    $('portrait').textContent = L.portrait;
+  }
+  function status(kind, text) {
+    const bo = $('blackout');
+    if (bo) {
+      bo.classList.toggle('err', kind === 'err' || kind === 'warn');
+      if (kind === 'err' || kind === 'warn') { $('bo-text').textContent = text; }
+    }
+    $('status').className = 'status ' + kind;
+    $('status-text').textContent = text;
+  }
+
+  async function openCamera() {
+    if (!window.isSecureContext || !navigator.mediaDevices) { status('err', L.insecure); return false; }
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    const tall = window.innerHeight > window.innerWidth;
+    const size = { width: { ideal: tall ? fmt.height : fmt.width }, height: { ideal: tall ? fmt.width : fmt.height },
+                   frameRate: { ideal: fmt.fps } };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: facing, ...size } });
+      // 取得權限後才看得到鏡頭名稱。iPhone 的超廣角是獨立的一台相機（名稱含「超廣角 / Ultra Wide」）
+      if (!ultraChecked) {
+        const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+        const u = devs.find(d => /ultra\s*wide|超廣角|超广角|超広角|초광각/i.test(d.label) && !/front|前置|前面|전면/i.test(d.label));
+        ultraId = u ? u.deviceId : null;
+        ultraChecked = true;
+      }
+      if (facing === 'environment' && lens === 'ultra' && ultraId) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { deviceId: { exact: ultraId }, ...size } });
+      }
+      texts();
+    } catch (e) {
+      status('err', e && e.name === 'NotAllowedError' ? L.denied : String(e));
+      return false;
+    }
+    v.srcObject = stream;
+    await v.play().catch(() => {});
+    return true;
+  }
+
+  function draw(frameT) {
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return false;
+    rot = curRot();
+    const side = rot % 180 !== 0;
+    const sw = side ? vh : vw, sh = side ? vw : vh;          // 旋轉後的長寬
+    const scale = Math.min(1, Math.min(fmt.width, res === 'auto' ? LEVELS[level][0] : +res) / Math.max(sw, sh));   // 長邊 = 設定的寬度（例如 1280）
+    const W = Math.round(sw * scale / 2) * 2, H = Math.round(sh * scale / 2) * 2;
+    if (cv.width !== W || cv.height !== H) {
+      cv.width = W; cv.height = H;
+      $('stage').style.aspectRatio = `${W} / ${H}`;
+      $('stage').classList.toggle('tall', H > W);
+    }
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.rotate(rot * Math.PI / 180);
+    const dw = side ? H : W, dh = side ? W : H;
+    ctx.drawImage(v, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+    // 拍攝時間：有逐幀時間就用它，否則用現在
+    const nowT = performance.now();
+    const t = (frameT && frameT <= nowT && nowT - frameT < 250) ? frameT : nowT;
+    capT = performance.timeOrigin + t;
+    $('portrait').classList.add('hidden');
+    return true;
+  }
+
+  // Wi‑Fi 上傳太慢時自動降低解析度／畫質（每張越小，每秒能送越多張）
+  const LEVELS = [[1280, 0.75], [960, 0.7], [800, 0.62], [640, 0.55]];
+  let level = 0, rtt = 0, kb = 0, slowT = 0, fastT = 0;
+  function adapt(ms) {
+    rtt = rtt ? 0.8 * rtt + 0.2 * ms : ms;
+    const now = performance.now(), target = 1000 / fmt.fps;
+    if (rtt > target * 2.2 && fps && fps < fmt.fps * 0.7) {
+      fastT = 0;
+      if (!slowT) slowT = now;
+      if (now - slowT > 1500 && level < LEVELS.length - 1) { level++; slowT = 0; rtt = 0; }
+    } else if (rtt < target * 0.8) {
+      slowT = 0;
+      if (!fastT) fastT = now;
+      if (now - fastT > 8000 && level > 0) { level--; fastT = 0; }
+    }
+  }
+  function send() {
+    inflight++;
+    const w = cv.width, h = cv.height, cap = capT;
+    const t0 = performance.now();
+    cv.toBlob(async blob => {
+      try {
+        kb = blob ? blob.size / 1024 : 0;
+        const r = await fetch(`/frame?client=${client}`, { method: 'POST', body: blob,
+          headers: { 'Content-Type': 'image/jpeg', 'X-Width': String(w), 'X-Height': String(h),
+                     'X-Device': /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'Phone', 'X-Capture': cap.toFixed(1),
+                     'X-Lens': facing === 'user' ? 'front' : (lens === 'ultra' && ultraId ? 'ultra' : 'wide') } });
+        const j = await r.json();
+        if (j.busy) status('warn', L.busy);
+        else {
+          sent++;
+          const now = performance.now();
+          if (now - fpsT > 1000) { fps = sent * 1000 / (now - fpsT); sent = 0; fpsT = now; }
+          adapt(performance.now() - t0);
+          status('live', `${L.live} · ${fps ? Math.round(fps) : '…'} ${L.fps} · ${w}×${h} · ${Math.round(kb)} KB`);
+        }
+        fails = 0;
+        if (j.width && (j.width !== fmt.width || j.fps !== fmt.fps)) {
+          const reopen = j.width !== fmt.width || j.height !== fmt.height;
+          fmt = { ...fmt, ...j };
+          if (reopen && running) openCamera();
+        } else if (j.quality) fmt.quality = j.quality;
+      } catch (e) {
+        if (++fails > 5) status('err', L.lost);
+      } finally { inflight--; }
+    }, 'image/jpeg', Math.min(fmt.quality, LEVELS[level][1]));
+  }
+
+  // 每一個新的相機影格回呼一次，並附上這一幀的時間（Safari 15.4+、Chrome）。
+  // 比畫面更新（60Hz）準：不會把同一幀送兩次，時間誤差也從最多一幀（33ms）降到幾毫秒
+  const hasVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  let vfcN = 0, vfcT = 0, useRaf = false;
+  function onFrame(now, md) {
+    if (!running || useRaf) return;
+    vfcN++;
+    if (!vfcT) vfcT = now;
+    else if (now - vfcT > 2000) {                       // 影格回呼太慢（瀏覽器節流）：改用畫面更新
+      if (vfcN * 1000 / (now - vfcT) < fmt.fps * 0.5) { useRaf = true; loop(); return; }
+      vfcN = 0; vfcT = now;
+    }
+    const ft = md && (md.captureTime || md.presentationTime) || now;
+    if (inflight < 2 && performance.now() - lastSend >= 1000 / fmt.fps - 4) {
+      if (draw(ft)) { lastSend = performance.now(); send(); }
+    }
+    v.requestVideoFrameCallback(onFrame);
+  }
+
+  function loop() {
+    if (!running) return;
+    const now = performance.now();
+    if (inflight < 2 && now - lastSend >= 1000 / fmt.fps - 2) {
+      if (draw()) { lastSend = now; send(); }
+    } else if (inflight >= 2) draw();
+    requestAnimationFrame(loop);
+  }
+
+  async function keepAwake() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', () => { if (running && document.visibilityState === 'visible') keepAwake(); });
+
+  async function start() {
+    status('', L.connecting);
+    try {
+      if (window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission)
+        await DeviceOrientationEvent.requestPermission();               // iPhone：自動轉正要用到手機的方向
+    } catch (e) {}
+    if (!await openCamera()) return;
+    running = true;
+    $('idle').classList.add('hidden');
+    keepAwake();
+    texts();
+    vfcN = 0; vfcT = 0; useRaf = !hasVFC;
+    if (hasVFC) v.requestVideoFrameCallback(onFrame);
+    else loop();
+  }
+  function stop() {
+    running = false;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    navigator.sendBeacon && navigator.sendBeacon(`/bye?client=${client}`);
+    $('idle').classList.remove('hidden');
+    status('', '');
+    leaveDark();
+    texts();
+  }
+
+  // ---- 黑畫面 ----
+  let fadeT = 0, holdT = 0, holdStart = 0, holdRaf = 0;
+  function showDarkMsg() {
+    const bo = $('blackout');
+    if (!bo.classList.contains('err')) $('bo-text').innerHTML = `${L.dark_live} · ${fps ? Math.round(fps) : '…'} ${L.fps}<br>${L.dark_exit}`;
+    $('bo-msg').classList.remove('fade');
+    clearTimeout(fadeT);
+    fadeT = setTimeout(() => $('bo-msg').classList.add('fade'), 3000);
+  }
+  function enterDark() {
+    if (!running) return;
+    $('blackout').classList.remove('hidden');
+    showDarkMsg();
+  }
+  function leaveDark() {
+    $('blackout').classList.add('hidden');
+    cancelHold();
+  }
+  function cancelHold() {
+    clearTimeout(holdT); cancelAnimationFrame(holdRaf);
+    $('bo-bar').style.width = '0';
+  }
+  function holdAnim() {
+    const f = Math.min(1, (performance.now() - holdStart) / 2000);
+    $('bo-bar').style.width = (f * 100) + '%';
+    if (f < 1) holdRaf = requestAnimationFrame(holdAnim);
+  }
+  const bo = $('blackout');
+  bo.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    showDarkMsg();
+    holdStart = performance.now();
+    holdAnim();
+    holdT = setTimeout(leaveDark, 2000);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => bo.addEventListener(n, cancelHold));
+  ['touchstart', 'touchmove', 'gesturestart', 'contextmenu'].forEach(n =>
+    bo.addEventListener(n, e => e.preventDefault(), { passive: false }));
+  $('dark').onclick = enterDark;
+
+  $('go').onclick = () => running ? stop() : start();
+  $('flip').onclick = async () => {
+    facing = facing === 'environment' ? 'user' : 'environment';
+    localStorage.setItem('facing', facing);
+    texts();
+    if (running) await openCamera();
+  };
+  $('lens').onclick = async () => {
+    lens = lens === 'ultra' ? 'wide' : 'ultra';
+    localStorage.setItem('lens', lens);
+    texts();
+    if (running) await openCamera();
+  };
+  let orientT = 0, lastTall = window.innerHeight > window.innerWidth;
+  window.addEventListener('resize', () => {
+    clearTimeout(orientT);
+    orientT = setTimeout(() => {
+      const tall = window.innerHeight > window.innerWidth;
+      if (tall !== lastTall && running) openCamera();
+      lastTall = tall;
+    }, 600);
+  });
+  $('res').onclick = () => {
+    res = RES[(RES.indexOf(res) + 1) % RES.length];
+    localStorage.setItem('res', res); texts();
+  };
+  const ROTS = ['auto', '0', '90', '180', '270'];
+  $('rotate').onclick = () => {
+    rotMode = ROTS[(ROTS.indexOf(rotMode) + 1) % ROTS.length];
+    localStorage.setItem('rotMode', rotMode); texts();
+  };
+  window.addEventListener('deviceorientation', onTilt);
+  window.addEventListener('pagehide', () => { if (running) navigator.sendBeacon(`/bye?client=${client}`); });
+
+  texts();
+  status('', '');
+  if (new URLSearchParams(location.search).get('autostart') === '1') start();      // 測試用
+})();
+</script>
+</body>
+</html>

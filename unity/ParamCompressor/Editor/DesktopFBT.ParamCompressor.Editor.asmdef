@@ -1,0 +1,36 @@
+{
+    "name": "DesktopFBT.ParamCompressor.Editor",
+    "rootNamespace": "DesktopFBT",
+    "references": [
+        "DesktopFBT.ParamCompressor.Runtime",
+        "VRC.SDK3A",
+        "VRC.SDKBase",
+        "nadena.dev.ndmf",
+        "nadena.dev.ndmf.runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "YFBT_VRC_AVATARS",
+        "YFBT_NDMF"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.avatars",
+            "expression": "",
+            "define": "YFBT_VRC_AVATARS"
+        },
+        {
+            "name": "nadena.dev.ndmf",
+            "expression": "1.0.0",
+            "define": "YFBT_NDMF"
+        }
+    ],
+    "noEngineReferences": false
+}
